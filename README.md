@@ -25,9 +25,43 @@ docker compose up --build
 
 5. Abre `http://localhost:5173` e inicia sesion con el usuario bootstrap.
 
+## Entorno local con ClickHouse propio
+
+El `docker-compose.yml` de la raiz es el de produccion (Dokploy) y se conecta a un ClickHouse
+externo. Para correr **todo en local** (incluyendo ClickHouse) y traer la data real del cloud,
+usa `docker-compose.local.yml`, que es autocontenido y persiste la data en el volumen
+`clickhouse_data`.
+
+```powershell
+# 1. Config
+cp .env.local.example .env.local      # secretos del stack local
+cp .env.cloud.example .env.cloud      # credenciales reales del ClickHouse cloud (origen)
+
+# 2. Levantar stack (ClickHouse + api + worker + frontend)
+docker compose -f docker-compose.local.yml --env-file .env.local up -d --build
+
+# 3. (paso 0) Ver el tamano REAL en disco antes de descargar nada
+./scripts/sync-clickhouse.ps1 -MeasureOnly
+
+# 4. Sincronizar la data del cloud -> local (persiste en el volumen)
+./scripts/sync-clickhouse.ps1
+#   - solo una tabla:    ./scripts/sync-clickhouse.ps1 -Tables ani_fin
+#   - forzar refresco:   ./scripts/sync-clickhouse.ps1 -Force
+```
+
+- Frontend local: `http://localhost:8080` (login con el admin bootstrap).
+- API local: `http://localhost:8000/api/health`.
+- ClickHouse local: `localhost:8123` (HTTP) / `localhost:9000` (nativo).
+
+La data queda en el volumen `clickhouse_data`. En arranques siguientes
+(`docker compose -f docker-compose.local.yml --env-file .env.local up -d`) **no** se re-descarga:
+la info sigue sincronizada. Solo vuelve a sincronizar si corres el script otra vez (o con `-Force`).
+El script `scripts/sync-clickhouse.ps1` autodescubre las tablas `MergeTree` de las bases listadas
+en `CLOUD_CH_DATABASES`, recrea su esquema exacto y copia la data via la funcion `remote()`.
+
 ## Seguridad
 
-La clave de ClickHouse no esta hardcodeada. Como las credenciales originales fueron compartidas en chat, rota la contrasena antes de usar esta app en produccion.
+La clave de ClickHouse no esta hardcodeada. Como las credenciales originales fueron compartidas en chat, rota la contrasena antes de usar esta app en produccion. Los archivos `.env.local` y `.env.cloud` estan en `.gitignore`; nunca commitees credenciales reales.
 
 ## Servicios
 

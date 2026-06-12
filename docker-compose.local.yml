@@ -1,0 +1,98 @@
+# Entorno LOCAL completo (ClickHouse + API + worker + frontend).
+# NO usa dokploy-network: es autocontenido y no afecta el deploy de produccion.
+#
+# Uso:
+#   docker compose -f docker-compose.local.yml --env-file .env.local up -d --build
+services:
+  clickhouse:
+    build: ./clickhouse
+    container_name: regis-clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-regislocal}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    ports:
+      - "8123:8123"   # HTTP (DBeaver/cliente, y la API)
+      - "9000:9000"   # nativo
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse           # <-- la data persiste aqui
+      - ./clickhouse/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --user default --password \"$$CLICKHOUSE_PASSWORD\" --query 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 20s
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: local
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Bogota}
+      JWT_SECRET: ${JWT_SECRET:-change-me-use-a-long-random-secret}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-regislocal}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-app}
+      CLICKHOUSE_SECURE: "false"
+      REGIS_BOOTSTRAP_ADMIN_USER: ${REGIS_BOOTSTRAP_ADMIN_USER:-admin}
+      REGIS_BOOTSTRAP_ADMIN_PASSWORD: ${REGIS_BOOTSTRAP_ADMIN_PASSWORD:-admin1234}
+      EXPORT_DIR: /exports
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-3}
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-30}
+      BULK_CHUNK_SIZE: ${BULK_CHUNK_SIZE:-5000}
+      XLSX_MAX_ROWS: ${XLSX_MAX_ROWS:-200000}
+    volumes:
+      - regis_exports:/exports
+    ports:
+      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: local
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Bogota}
+      JWT_SECRET: ${JWT_SECRET:-change-me-use-a-long-random-secret}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-regislocal}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-app}
+      CLICKHOUSE_SECURE: "false"
+      EXPORT_DIR: /exports
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-3}
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-30}
+      BULK_CHUNK_SIZE: ${BULK_CHUNK_SIZE:-5000}
+      XLSX_MAX_ROWS: ${XLSX_MAX_ROWS:-200000}
+    volumes:
+      - regis_exports:/exports
+    command: python -m app.worker
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      api:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: /api
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  clickhouse_data:
+  regis_exports:
