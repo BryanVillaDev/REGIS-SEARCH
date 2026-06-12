@@ -11,7 +11,12 @@ def _client_kwargs() -> dict:
     parsed = urlparse(settings.clickhouse_url)
     host = parsed.hostname or settings.clickhouse_url
     secure = settings.clickhouse_secure or parsed.scheme == "https"
-    port = parsed.port or (8443 if secure else 8123)
+    if parsed.port:
+        port = parsed.port
+    elif parsed.scheme in {"http", "https"}:
+        port = 443 if secure else 80
+    else:
+        port = 8443 if secure else 8123
     username = parsed.username or settings.clickhouse_user
     password = parsed.password or settings.clickhouse_password
 
