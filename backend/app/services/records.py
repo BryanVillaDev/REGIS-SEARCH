@@ -113,6 +113,58 @@ def get_contacts(aninuip: int) -> list[ContactInfo]:
     ]
 
 
+def query_name_candidates(anchor_tokens: list[str], limit: int = 500) -> list[dict[str, Any]]:
+    """Trae registros candidatos cuyo apellido empieza por alguno de los tokens.
+
+    Se ancla en ANIApellido1/ANIApellido2 (las columnas mas selectivas) por
+    cada token distintivo de la entrada. El ranking fino se hace luego en
+    Python con :mod:`app.services.name_matching`.
+    """
+    if not anchor_tokens:
+        return []
+
+    conditions: list[str] = []
+    parameters: dict[str, Any] = {"limit": int(limit)}
+    for index, token in enumerate(anchor_tokens):
+        key = f"t{index}"
+        parameters[key] = token
+        conditions.append(f"startsWith(ANIApellido1, {{{key}:String}})")
+        conditions.append(f"startsWith(ifNull(ANIApellido2, ''), {{{key}:String}})")
+
+    where_clause = " OR ".join(conditions)
+    client = get_clickhouse_client()
+    result = client.query(
+        f"""
+        SELECT
+            ANINuip,
+            ANIApellido1,
+            ANIApellido2,
+            ANINombre1,
+            ANINombre2,
+            ANIFchNacimiento,
+            ANISexo,
+            LUGIdNacimiento
+        FROM ani.ani_fin
+        WHERE {where_clause}
+        LIMIT {{limit:UInt32}}
+        """,
+        parameters=parameters,
+    )
+    return [
+        {
+            "ANINuip": int(row[0]),
+            "ANIApellido1": row[1],
+            "ANIApellido2": row[2],
+            "ANINombre1": row[3],
+            "ANINombre2": row[4],
+            "ANIFchNacimiento": serialize_value(row[5]),
+            "ANISexo": row[6],
+            "LUGIdNacimiento": row[7],
+        }
+        for row in result.result_rows
+    ]
+
+
 def search_by_name(
     *,
     apellido1: str | None,

@@ -13,6 +13,14 @@ function statusLabel(status: string) {
   return labels[status] || status;
 }
 
+function kindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    cedulas: "Cedulas",
+    nombres: "Nombres"
+  };
+  return labels[kind] || kind;
+}
+
 export function JobsPage() {
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
@@ -58,7 +66,7 @@ export function JobsPage() {
                 return (
                   <tr key={job.id}>
                     <td>{new Date(job.created_at).toLocaleString()}</td>
-                    <td>{job.kind}</td>
+                    <td>{kindLabel(job.kind)}</td>
                     <td>
                       <span className={`status-chip ${job.status}`}>{statusLabel(job.status)}</span>
                       {job.error ? <small className="error-inline">{job.error}</small> : null}

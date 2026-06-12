@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { FileUp, ListChecks, Search, UserSearch } from "lucide-react";
+import { FileUp, ListChecks, Search, Users, UserSearch } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
-import { createCedulasJob, NameSearchParams, searchName } from "../api/client";
+import { createCedulasJob, createNombresJob, NameSearchParams, searchName } from "../api/client";
 
 type SearchMode = "prefix" | "exact";
 
@@ -18,6 +18,7 @@ export function SearchPage() {
   const [offset, setOffset] = useState(0);
   const [submittedParams, setSubmittedParams] = useState<NameSearchParams | null>(null);
   const [cedulasText, setCedulasText] = useState("");
+  const [nombresText, setNombresText] = useState("");
 
   const params = useMemo<NameSearchParams | null>(() => {
     if (!submittedParams) {
@@ -36,6 +37,14 @@ export function SearchPage() {
     mutationFn: createCedulasJob,
     onSuccess: () => {
       setCedulasText("");
+      navigate("/jobs");
+    }
+  });
+
+  const bulkNombresMutation = useMutation({
+    mutationFn: createNombresJob,
+    onSuccess: () => {
+      setNombresText("");
       navigate("/jobs");
     }
   });
@@ -61,11 +70,25 @@ export function SearchPage() {
     }
   }
 
+  function submitBulkNombres(event: FormEvent) {
+    event.preventDefault();
+    if (nombresText.trim()) {
+      bulkNombresMutation.mutate(nombresText);
+    }
+  }
+
   async function handleFile(file: File | null) {
     if (!file) {
       return;
     }
     setCedulasText(await file.text());
+  }
+
+  async function handleNombresFile(file: File | null) {
+    if (!file) {
+      return;
+    }
+    setNombresText(await file.text());
   }
 
   return (
@@ -131,6 +154,44 @@ export function SearchPage() {
             </button>
           </div>
           {bulkMutation.error ? <p className="error-text">{bulkMutation.error.message}</p> : null}
+        </form>
+
+        <form className="panel" onSubmit={submitBulkNombres}>
+          <div className="panel-heading">
+            <Users size={20} />
+            <div>
+              <h2>Lote de nombres</h2>
+              <p>Un nombre por linea. Rankea la coincidencia mas cercana.</p>
+            </div>
+          </div>
+          <textarea
+            value={nombresText}
+            onChange={(event) => setNombresText(event.target.value)}
+            placeholder={"PEREZ GOMEZ JUAN CARLOS\nRAMIREZ;DIAZ;MARIA;JOSE\nLOPEZ TORRES, ANA"}
+            rows={6}
+          />
+          <p className="muted-text">
+            Acepta 1 columna (nombre completo), 2 columnas (apellidos | nombres) o 4 columnas
+            (apellido1 | apellido2 | nombre1 | nombre2). Separadores: tab, ";", "|" o ",".
+          </p>
+          <div className="inline-actions">
+            <label className="file-button">
+              <FileUp size={17} />
+              Archivo
+              <input
+                type="file"
+                accept=".txt,.csv"
+                onChange={(event) => handleNombresFile(event.target.files?.[0] || null)}
+              />
+            </label>
+            <button className="primary-button" disabled={bulkNombresMutation.isPending} type="submit">
+              <ListChecks size={18} />
+              {bulkNombresMutation.isPending ? "Creando..." : "Crear job"}
+            </button>
+          </div>
+          {bulkNombresMutation.error ? (
+            <p className="error-text">{bulkNombresMutation.error.message}</p>
+          ) : null}
         </form>
       </section>
 

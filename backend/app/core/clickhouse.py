@@ -115,3 +115,16 @@ def init_metadata() -> None:
         ORDER BY (job_id, cedula)
         """
     )
+
+    client.command(
+        """
+        CREATE TABLE IF NOT EXISTS app.regis_search_job_name_inputs
+        (
+            job_id UUID,
+            row_index UInt32,
+            raw String
+        )
+        ENGINE = MergeTree
+        ORDER BY (job_id, row_index)
+        """
+    )

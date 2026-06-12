@@ -9,6 +9,7 @@ App Dockerizada con FastAPI, React y ClickHouse para consultar registros ANI, co
 - Consulta por `ANINuip` con ubicaciones resueltas y contactos.
 - Busqueda por nombres/apellidos con paginacion.
 - Busqueda masiva por cedulas mediante jobs procesados por un worker.
+- Busqueda masiva por nombres con ranking de la coincidencia mas cercana (tolerante a typos, tildes y al orden de los tokens). Acepta entradas en 1, 2 o 4 columnas.
 - Descarga de resultados en CSV y XLSX cuando el lote cabe dentro del limite configurado.
 
 ## Inicio rapido
@@ -50,5 +51,6 @@ Al iniciar, la API crea estas tablas si no existen:
 - `app.regis_search_audit`
 - `app.regis_search_jobs`
 - `app.regis_search_job_inputs`
+- `app.regis_search_job_name_inputs`
 
 El worker esta pensado como instancia unica para el MVP.

@@ -169,6 +169,13 @@ export function createCedulasJob(cedulas: string) {
   });
 }
 
+export function createNombresJob(nombres: string) {
+  return apiFetch<JobPublic>("/search/nombres", {
+    method: "POST",
+    body: JSON.stringify({ nombres })
+  });
+}
+
 export function listJobs() {
   return apiFetch<JobPublic[]>("/jobs");
 }

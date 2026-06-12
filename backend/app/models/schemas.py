@@ -78,6 +78,16 @@ class BulkCedulasRequest(BaseModel):
     cedulas: list[str] | str = Field(description="Lista de cedulas o texto separado por saltos, comas o espacios")
 
 
+class BulkNombresRequest(BaseModel):
+    nombres: list[str] | str = Field(
+        description=(
+            "Lista de nombres o texto con un nombre por linea. Cada linea puede venir en "
+            "1 columna (nombre completo), 2 columnas (apellidos | nombres) o 4 columnas "
+            "(apellido1 | apellido2 | nombre1 | nombre2), separadas por tab, ';', '|' o ','."
+        )
+    )
+
+
 class JobPublic(BaseModel):
     id: UUID
     kind: str

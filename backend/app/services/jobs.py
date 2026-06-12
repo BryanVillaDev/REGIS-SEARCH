@@ -10,7 +10,16 @@ from app.core.clickhouse import get_clickhouse_client
 from app.core.config import settings
 from app.models.schemas import JobPublic
 from app.services.formatting import location_code, make_full_name, parse_cedulas, serialize_value
-from app.services.records import _fetch_locations
+from app.services.name_matching import (
+    candidate_tokens,
+    confidence_label,
+    match_state,
+    parse_name_line,
+    parse_name_rows,
+    score_tokens,
+    select_anchor_tokens,
+)
+from app.services.records import _fetch_locations, query_name_candidates
 from app.services.users import UserRecord
 
 
@@ -88,6 +97,28 @@ EXPORT_COLUMNS = [
     "expedicion_ciudad",
     "expedicion_depto",
 ]
+
+NOMBRES_EXPORT_COLUMNS = [
+    "fila",
+    "entrada",
+    "estado",
+    "score",
+    "confianza",
+    "cedula",
+    "apellido1",
+    "apellido2",
+    "nombre1",
+    "nombre2",
+    "nombre_completo",
+    "fecha_nacimiento",
+    "sexo",
+    "nacimiento_ciudad",
+    "nacimiento_depto",
+    "alternativas",
+]
+
+# Cuantos candidatos se consideran como alternativas adicionales por fila.
+NOMBRES_TOP_ALTERNATIVES = 2
 
 
 def _now() -> datetime:
@@ -180,6 +211,37 @@ def create_cedulas_job(cedulas_input: list[str] | str, user: UserRecord) -> JobP
     return job.public()
 
 
+def create_nombres_job(nombres_input: list[str] | str, user: UserRecord) -> JobPublic:
+    rows, input_count = parse_name_rows(nombres_input)
+    now = _now()
+    job = JobRecord(
+        id=uuid4(),
+        user_id=user.id,
+        username=user.username,
+        kind="nombres",
+        status="queued",
+        input_count=input_count,
+        unique_count=len(rows),
+        processed_count=0,
+        result_count=0,
+        error=None,
+        export_csv_path=None,
+        export_xlsx_path=None,
+        created_at=now,
+        updated_at=now,
+        started_at=None,
+        finished_at=None,
+    )
+    client = get_clickhouse_client()
+    client.insert(
+        "app.regis_search_job_name_inputs",
+        [[str(job.id), index, raw] for index, raw in enumerate(rows)],
+        column_names=["job_id", "row_index", "raw"],
+    )
+    _insert_job(job)
+    return job.public()
+
+
 def list_jobs(user: UserRecord, limit: int = 50) -> list[JobPublic]:
     client = get_clickhouse_client()
     user_filter = "" if user.role == "admin" else "WHERE user_id = toUUID({user_id:String})"
@@ -253,8 +315,15 @@ def claim_next_job() -> JobRecord | None:
     return _update_job(job, status="running", started_at=_now(), error=None)
 
 
+_JOB_PROCESSORS = {
+    "cedulas": "_process_cedulas_job",
+    "nombres": "_process_nombres_job",
+}
+
+
 def process_job(job: JobRecord) -> JobRecord:
-    if job.kind != "cedulas":
+    processor_name = _JOB_PROCESSORS.get(job.kind)
+    if not processor_name:
         return _update_job(
             job,
             status="failed",
@@ -262,8 +331,9 @@ def process_job(job: JobRecord) -> JobRecord:
             finished_at=_now(),
         )
 
+    processor = globals()[processor_name]
     try:
-        return _process_cedulas_job(job)
+        return processor(job)
     except Exception as exc:  # noqa: BLE001 - worker must persist failures.
         return _update_job(
             job,
@@ -410,6 +480,160 @@ def _process_cedulas_job(job: JobRecord) -> JobRecord:
                 writer.writerow(row)
                 if worksheet:
                     worksheet.append([row[column] for column in EXPORT_COLUMNS])
+
+            processed += len(chunk)
+            current_job = _update_job(
+                current_job,
+                processed_count=processed,
+                result_count=found,
+            )
+
+    xlsx_file_value = None
+    if workbook:
+        workbook.save(xlsx_path)
+        xlsx_file_value = str(xlsx_path)
+
+    return _update_job(
+        current_job,
+        status="done",
+        processed_count=processed,
+        result_count=found,
+        export_csv_path=str(csv_path),
+        export_xlsx_path=xlsx_file_value,
+        finished_at=_now(),
+    )
+
+
+# --- Jobs de nombres ---------------------------------------------------------
+
+# Cada fila lanza una consulta a ClickHouse, asi que el chunk es pequenio para
+# refrescar el progreso seguido (no para eficiencia de red como en cedulas).
+NOMBRES_PROGRESS_CHUNK = 25
+NOMBRES_CANDIDATE_LIMIT = 500
+
+
+def _fetch_job_name_rows(job_id: UUID) -> list[tuple[int, str]]:
+    client = get_clickhouse_client()
+    result = client.query(
+        """
+        SELECT row_index, raw
+        FROM app.regis_search_job_name_inputs
+        WHERE job_id = toUUID({job_id:String})
+        ORDER BY row_index
+        """,
+        parameters={"job_id": str(job_id)},
+    )
+    return [(int(row[0]), row[1]) for row in result.result_rows]
+
+
+def _rank_name_row(raw: str) -> list[tuple[dict, int]]:
+    """Devuelve [(candidato, score)] ordenado del mejor al peor para una fila."""
+    query = parse_name_line(raw)
+    if not query.tokens:
+        return []
+    anchors = select_anchor_tokens(query.tokens)
+    candidates = query_name_candidates(anchors, limit=NOMBRES_CANDIDATE_LIMIT)
+
+    scored: list[tuple[dict, int]] = []
+    for candidate in candidates:
+        score = score_tokens(
+            query.tokens,
+            candidate_tokens(
+                candidate.get("ANIApellido1"),
+                candidate.get("ANIApellido2"),
+                candidate.get("ANINombre1"),
+                candidate.get("ANINombre2"),
+            ),
+        )
+        if score > 0:
+            scored.append((candidate, score))
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return scored[: 1 + NOMBRES_TOP_ALTERNATIVES]
+
+
+def _empty_nombres_row(row_index: int, raw: str) -> dict:
+    row = {column: "" for column in NOMBRES_EXPORT_COLUMNS}
+    row["fila"] = row_index + 1
+    row["entrada"] = raw
+    row["estado"] = "sin_coincidencia"
+    row["score"] = 0
+    row["confianza"] = "muy baja"
+    return row
+
+
+def _nombres_export_row(row_index: int, raw: str, ranked: list[tuple[dict, int]], locations: dict) -> dict:
+    if not ranked:
+        return _empty_nombres_row(row_index, raw)
+
+    best, best_score = ranked[0]
+    nacimiento = locations.get(location_code(best.get("LUGIdNacimiento")))
+    alternativas = "; ".join(
+        f"{candidate['ANINuip']} ({score}%)" for candidate, score in ranked[1:]
+    )
+    return {
+        "fila": row_index + 1,
+        "entrada": raw,
+        "estado": match_state(best_score),
+        "score": best_score,
+        "confianza": confidence_label(best_score),
+        "cedula": best["ANINuip"],
+        "apellido1": best.get("ANIApellido1") or "",
+        "apellido2": best.get("ANIApellido2") or "",
+        "nombre1": best.get("ANINombre1") or "",
+        "nombre2": best.get("ANINombre2") or "",
+        "nombre_completo": make_full_name(
+            best.get("ANINombre1"),
+            best.get("ANINombre2"),
+            best.get("ANIApellido1"),
+            best.get("ANIApellido2"),
+        ),
+        "fecha_nacimiento": best.get("ANIFchNacimiento") or "",
+        "sexo": best.get("ANISexo") or "",
+        "nacimiento_ciudad": getattr(nacimiento, "ciudad", "") if nacimiento else "",
+        "nacimiento_depto": getattr(nacimiento, "depto", "") if nacimiento else "",
+        "alternativas": alternativas,
+    }
+
+
+def _process_nombres_job(job: JobRecord) -> JobRecord:
+    export_dir = Path(settings.export_dir)
+    export_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = export_dir / f"nombres-{job.id}.csv"
+    xlsx_path = export_dir / f"nombres-{job.id}.xlsx"
+
+    rows = _fetch_job_name_rows(job.id)
+    processed = 0
+    found = 0
+    create_xlsx = len(rows) <= settings.xlsx_max_rows
+    workbook = Workbook(write_only=True) if create_xlsx else None
+    worksheet = workbook.create_sheet("Resultados") if workbook else None
+    if worksheet:
+        worksheet.append(NOMBRES_EXPORT_COLUMNS)
+
+    current_job = job
+    with csv_path.open("w", newline="", encoding="utf-8-sig") as csv_file:
+        writer = csv.DictWriter(csv_file, fieldnames=NOMBRES_EXPORT_COLUMNS)
+        writer.writeheader()
+
+        for index in range(0, len(rows), NOMBRES_PROGRESS_CHUNK):
+            chunk = rows[index : index + NOMBRES_PROGRESS_CHUNK]
+            ranked_chunk: list[tuple[int, str, list[tuple[dict, int]]]] = []
+            codes: set[str | None] = set()
+            for row_index, raw in chunk:
+                ranked = _rank_name_row(raw)
+                ranked_chunk.append((row_index, raw, ranked))
+                if ranked:
+                    codes.add(location_code(ranked[0][0].get("LUGIdNacimiento")))
+            locations = _fetch_locations(codes)
+
+            for row_index, raw, ranked in ranked_chunk:
+                row = _nombres_export_row(row_index, raw, ranked, locations)
+                if row["estado"] == "encontrado":
+                    found += 1
+                writer.writerow(row)
+                if worksheet:
+                    worksheet.append([row[column] for column in NOMBRES_EXPORT_COLUMNS])
 
             processed += len(chunk)
             current_job = _update_job(
