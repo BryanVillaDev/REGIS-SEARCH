@@ -20,8 +20,8 @@ services:
       XLSX_MAX_ROWS: ${XLSX_MAX_ROWS:-200000}
     volumes:
       - regis_exports:/exports
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   worker:
@@ -54,10 +54,15 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
-    ports:
-      - "5173:80"
+    networks:
+      - default
+      - dokploy-network
     depends_on:
       - api
 
 volumes:
   regis_exports:
+
+networks:
+  dokploy-network:
+    external: true
