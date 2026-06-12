@@ -1,45 +1,46 @@
-import { BriefcaseBusiness, LogOut, Search, UploadCloud } from "lucide-react";
+import { LogOut, Search, UploadCloud } from "lucide-react";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 
 import { useAuth } from "../state/AuthContext";
+
+function initials(value: string | undefined): string {
+  if (!value) {
+    return "U";
+  }
+  const parts = value.trim().split(/\s+/).slice(0, 2);
+  return parts.map((part) => part[0]?.toUpperCase() || "").join("") || value[0].toUpperCase();
+}
 
 export function Layout({ children }: { children: ReactNode }) {
   const { logout, user } = useAuth();
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">R</div>
-          <div>
-            <strong>REGIS Search</strong>
-            <span>Consulta operativa</span>
-          </div>
+      <aside className="rail">
+        <div className="rail-brand" title="REGIS Search">
+          R
         </div>
 
-        <nav className="nav-list" aria-label="Navegacion principal">
-          <NavLink to="/" end>
-            <Search size={18} />
-            Busquedas
+        <nav className="rail-nav" aria-label="Navegacion principal">
+          <NavLink className="rail-item" to="/" end>
+            <Search size={20} />
+            Buscar
           </NavLink>
-          <NavLink to="/jobs">
-            <UploadCloud size={18} />
+          <NavLink className="rail-item" to="/jobs">
+            <UploadCloud size={20} />
             Jobs
           </NavLink>
         </nav>
 
-        <div className="sidebar-footer">
-          <div className="user-pill">
-            <BriefcaseBusiness size={16} />
-            <span>{user?.username || "usuario"}</span>
-            <small>{user?.role || "rol"}</small>
-          </div>
-          <button className="icon-text-button muted" type="button" onClick={logout}>
-            <LogOut size={17} />
-            Salir
-          </button>
+        <div className="rail-spacer" />
+        <div className="rail-user" title={`${user?.username || "usuario"} (${user?.role || "rol"})`}>
+          {initials(user?.username)}
         </div>
+        <button className="rail-item" type="button" onClick={logout} title="Cerrar sesion">
+          <LogOut size={20} />
+          Salir
+        </button>
       </aside>
 
       <main className="content">{children}</main>
