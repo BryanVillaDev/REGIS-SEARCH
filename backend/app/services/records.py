@@ -113,18 +113,30 @@ def get_contacts(aninuip: int) -> list[ContactInfo]:
     ]
 
 
-def query_name_candidates(anchor_tokens: list[str], limit: int = 500) -> list[dict[str, Any]]:
-    """Trae registros candidatos cuyo apellido empieza por alguno de los tokens.
+def rank_name_candidates(
+    anchor_tokens: list[str],
+    query_sorted: str,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Rankea los candidatos dentro de ClickHouse y devuelve solo el top-N.
 
-    Se ancla en ANIApellido1/ANIApellido2 (las columnas mas selectivas) por
-    cada token distintivo de la entrada. El ranking fino se hace luego en
-    Python con :mod:`app.services.name_matching`.
+    - El ``WHERE`` ancla por prefijo de ANIApellido1/ANIApellido2 (usa el indice)
+      para acotar el escaneo a quienes comparten algun token de apellido.
+    - El score lo calcula ClickHouse con ``jaroWinklerSimilarity`` sobre los
+      tokens del nombre **ordenados alfabeticamente** en ambos lados, asi el
+      ranking es independiente del orden (nombre/apellido) y tolerante a typos.
+    - El ``ORDER BY score DESC LIMIT N`` garantiza quedarnos con los MEJORES, no
+      con una muestra arbitraria (ese era el bug: un apellido comun como GOMEZ
+      llenaba el LIMIT y la persona correcta nunca entraba).
+
+    ``query_sorted`` debe venir ya normalizado (mayuscula, sin tildes) y con los
+    tokens ordenados; se construye en el worker a partir de la fila de entrada.
     """
-    if not anchor_tokens:
+    if not anchor_tokens or not query_sorted:
         return []
 
     conditions: list[str] = []
-    parameters: dict[str, Any] = {"limit": int(limit)}
+    parameters: dict[str, Any] = {"limit": int(limit), "q": query_sorted}
     for index, token in enumerate(anchor_tokens):
         key = f"t{index}"
         parameters[key] = token
@@ -143,9 +155,25 @@ def query_name_candidates(anchor_tokens: list[str], limit: int = 500) -> list[di
             ANINombre2,
             ANIFchNacimiento,
             ANISexo,
-            LUGIdNacimiento
+            LUGIdNacimiento,
+            jaroWinklerSimilarity(
+                arrayStringConcat(
+                    arraySort(splitByWhitespace(upperUTF8(
+                        concatWithSeparator(
+                            ' ',
+                            ifNull(ANIApellido1, ''),
+                            ifNull(ANIApellido2, ''),
+                            ifNull(ANINombre1, ''),
+                            ifNull(ANINombre2, '')
+                        )
+                    ))),
+                    ' '
+                ),
+                {{q:String}}
+            ) AS score
         FROM ani.ani_fin
         WHERE {where_clause}
+        ORDER BY score DESC
         LIMIT {{limit:UInt32}}
         """,
         parameters=parameters,
@@ -160,6 +188,7 @@ def query_name_candidates(anchor_tokens: list[str], limit: int = 500) -> list[di
             "ANIFchNacimiento": serialize_value(row[5]),
             "ANISexo": row[6],
             "LUGIdNacimiento": row[7],
+            "score": float(row[8]),
         }
         for row in result.result_rows
     ]

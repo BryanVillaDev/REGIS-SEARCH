@@ -217,12 +217,20 @@ def candidate_tokens(apellido1, apellido2, nombre1, nombre2) -> list[str]:
     return tokens
 
 
+def sorted_query_string(tokens: list[str]) -> str:
+    """Tokens normalizados y ordenados alfabeticamente, para comparar contra el
+    mismo formato que se arma en ClickHouse (independiente del orden)."""
+    return " ".join(sorted(tokens))
+
+
+# Umbrales calibrados para jaroWinklerSimilarity (es mas indulgente que un F1
+# de conjuntos: una coincidencia real queda muy alta, ~0.9+).
 def confidence_label(score: int) -> str:
-    if score >= 85:
+    if score >= 93:
         return "alta"
-    if score >= 70:
+    if score >= 85:
         return "media"
-    if score >= 50:
+    if score >= 80:
         return "baja"
     return "muy baja"
 
@@ -230,8 +238,8 @@ def confidence_label(score: int) -> str:
 def match_state(best_score: int | None) -> str:
     if best_score is None:
         return "sin_coincidencia"
-    if best_score >= 70:
+    if best_score >= 90:
         return "encontrado"
-    if best_score >= 50:
+    if best_score >= 80:
         return "revisar"
     return "sin_coincidencia"

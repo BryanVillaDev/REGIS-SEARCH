@@ -11,15 +11,14 @@ from app.core.config import settings
 from app.models.schemas import JobPublic
 from app.services.formatting import location_code, make_full_name, parse_cedulas, serialize_value
 from app.services.name_matching import (
-    candidate_tokens,
     confidence_label,
     match_state,
     parse_name_line,
     parse_name_rows,
-    score_tokens,
     select_anchor_tokens,
+    sorted_query_string,
 )
-from app.services.records import _fetch_locations, query_name_candidates
+from app.services.records import _fetch_locations, rank_name_candidates
 from app.services.users import UserRecord
 
 
@@ -509,7 +508,6 @@ def _process_cedulas_job(job: JobRecord) -> JobRecord:
 # Cada fila lanza una consulta a ClickHouse, asi que el chunk es pequenio para
 # refrescar el progreso seguido (no para eficiencia de red como en cedulas).
 NOMBRES_PROGRESS_CHUNK = 25
-NOMBRES_CANDIDATE_LIMIT = 500
 
 
 def _fetch_job_name_rows(job_id: UUID) -> list[tuple[int, str]]:
@@ -527,29 +525,27 @@ def _fetch_job_name_rows(job_id: UUID) -> list[tuple[int, str]]:
 
 
 def _rank_name_row(raw: str) -> list[tuple[dict, int]]:
-    """Devuelve [(candidato, score)] ordenado del mejor al peor para una fila."""
+    """Devuelve [(candidato, score 0-100)] ordenado del mejor al peor.
+
+    El ranking lo hace ClickHouse (jaroWinklerSimilarity); aqui solo parseamos
+    la entrada, anclamos por apellido y convertimos el score a 0-100.
+    """
     query = parse_name_line(raw)
     if not query.tokens:
         return []
     anchors = select_anchor_tokens(query.tokens)
-    candidates = query_name_candidates(anchors, limit=NOMBRES_CANDIDATE_LIMIT)
+    candidates = rank_name_candidates(
+        anchors,
+        sorted_query_string(query.tokens),
+        limit=1 + NOMBRES_TOP_ALTERNATIVES,
+    )
 
     scored: list[tuple[dict, int]] = []
     for candidate in candidates:
-        score = score_tokens(
-            query.tokens,
-            candidate_tokens(
-                candidate.get("ANIApellido1"),
-                candidate.get("ANIApellido2"),
-                candidate.get("ANINombre1"),
-                candidate.get("ANINombre2"),
-            ),
-        )
+        score = round(float(candidate.get("score", 0.0)) * 100)
         if score > 0:
             scored.append((candidate, score))
-
-    scored.sort(key=lambda item: item[1], reverse=True)
-    return scored[: 1 + NOMBRES_TOP_ALTERNATIVES]
+    return scored
 
 
 def _empty_nombres_row(row_index: int, raw: str) -> dict:

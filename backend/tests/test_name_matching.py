@@ -8,6 +8,7 @@ from app.services.name_matching import (
     parse_name_rows,
     score_tokens,
     select_anchor_tokens,
+    sorted_query_string,
     tokenize,
 )
 
@@ -90,12 +91,18 @@ def test_select_anchor_tokens_skips_particles_and_short_tokens():
     assert set(anchors) == {"PEREZ", "GOMEZ"}
 
 
+def test_sorted_query_string_is_order_independent():
+    a = sorted_query_string(tokenize("JAIRO ALEXANDER VILLALOBOS GOMEZ"))
+    b = sorted_query_string(tokenize("VILLALOBOS GOMEZ JAIRO ALEXANDER"))
+    assert a == b == "ALEXANDER GOMEZ JAIRO VILLALOBOS"
+
+
 def test_confidence_and_state_thresholds():
-    assert confidence_label(90) == "alta"
-    assert confidence_label(75) == "media"
-    assert confidence_label(55) == "baja"
-    assert confidence_label(10) == "muy baja"
+    assert confidence_label(95) == "alta"
+    assert confidence_label(88) == "media"
+    assert confidence_label(82) == "baja"
+    assert confidence_label(60) == "muy baja"
     assert match_state(None) == "sin_coincidencia"
-    assert match_state(80) == "encontrado"
-    assert match_state(60) == "revisar"
-    assert match_state(20) == "sin_coincidencia"
+    assert match_state(95) == "encontrado"
+    assert match_state(83) == "revisar"
+    assert match_state(50) == "sin_coincidencia"
