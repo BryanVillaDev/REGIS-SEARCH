@@ -1,0 +1,63 @@
+services:
+  api:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Bogota}
+      JWT_SECRET: ${JWT_SECRET:-change-me-use-a-long-random-secret}
+      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://localhost:8123}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-app}
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-false}
+      REGIS_BOOTSTRAP_ADMIN_USER: ${REGIS_BOOTSTRAP_ADMIN_USER:-admin}
+      REGIS_BOOTSTRAP_ADMIN_PASSWORD: ${REGIS_BOOTSTRAP_ADMIN_PASSWORD:-change-me-before-starting}
+      EXPORT_DIR: /exports
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-3}
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-30}
+      BULK_CHUNK_SIZE: ${BULK_CHUNK_SIZE:-5000}
+      XLSX_MAX_ROWS: ${XLSX_MAX_ROWS:-200000}
+    volumes:
+      - regis_exports:/exports
+    ports:
+      - "8000:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/Bogota}
+      JWT_SECRET: ${JWT_SECRET:-change-me-use-a-long-random-secret}
+      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://localhost:8123}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DATABASE:-app}
+      CLICKHOUSE_SECURE: ${CLICKHOUSE_SECURE:-false}
+      REGIS_BOOTSTRAP_ADMIN_USER: ${REGIS_BOOTSTRAP_ADMIN_USER:-admin}
+      REGIS_BOOTSTRAP_ADMIN_PASSWORD: ${REGIS_BOOTSTRAP_ADMIN_PASSWORD:-change-me-before-starting}
+      EXPORT_DIR: /exports
+      WORKER_POLL_SECONDS: ${WORKER_POLL_SECONDS:-3}
+      QUERY_TIMEOUT_SECONDS: ${QUERY_TIMEOUT_SECONDS:-30}
+      BULK_CHUNK_SIZE: ${BULK_CHUNK_SIZE:-5000}
+      XLSX_MAX_ROWS: ${XLSX_MAX_ROWS:-200000}
+    volumes:
+      - regis_exports:/exports
+    command: python -m app.worker
+    depends_on:
+      - api
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  regis_exports:
