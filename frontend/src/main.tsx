@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { AuthProvider } from "./state/AuthContext";
+import { MatrixRain } from "./components/MatrixRain";
 import App from "./App";
 import "./styles.css";
 
@@ -21,6 +22,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
+          <MatrixRain />
           <App />
         </AuthProvider>
       </BrowserRouter>
