@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_minutes: int = 8 * 60
 
+    # API key para integraciones maquina-a-maquina (endpoints sin JWT).
+    api_key: str | None = Field(default=None, alias="REGIS_API_KEY")
+
     clickhouse_url: str = "http://localhost:8123"
     clickhouse_user: str = "default"
     clickhouse_password: str = ""

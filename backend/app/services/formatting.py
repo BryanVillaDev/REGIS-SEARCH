@@ -45,6 +45,55 @@ def make_full_name(*parts: str | None) -> str:
     return " ".join(part for part in parts if part).strip()
 
 
+def parse_date(value: Any) -> date | None:
+    """Convierte fechas (date/datetime/ISO string) a ``date``; None si no aplica."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def date_pin_combinations(value: Any) -> dict[str, str]:
+    """Devuelve todas las combinaciones de 4 digitos derivadas de una fecha.
+
+    A partir de dia (DD), mes (MM) y anio (YYYY / YY ultimos dos digitos) se
+    arman las 7 combinaciones que siempre ocupan exactamente 4 digitos:
+
+    - ``anio``     -> YYYY (anio completo)
+    - ``dia_mes``  -> DDMM
+    - ``mes_dia``  -> MMDD
+    - ``dia_anio`` -> DDYY
+    - ``anio_dia`` -> YYDD
+    - ``mes_anio`` -> MMYY
+    - ``anio_mes`` -> YYMM
+    """
+    parsed = parse_date(value)
+    if parsed is None:
+        return {}
+    dd = f"{parsed.day:02d}"
+    mm = f"{parsed.month:02d}"
+    yyyy = f"{parsed.year:04d}"
+    yy = yyyy[-2:]
+    return {
+        "anio": yyyy,
+        "dia_mes": dd + mm,
+        "mes_dia": mm + dd,
+        "dia_anio": dd + yy,
+        "anio_dia": yy + dd,
+        "mes_anio": mm + yy,
+        "anio_mes": yy + mm,
+    }
+
+
 def location_code(value: Any) -> str | None:
     if value is None:
         return None

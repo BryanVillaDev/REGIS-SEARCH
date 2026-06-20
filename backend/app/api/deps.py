@@ -1,5 +1,8 @@
+import secrets
+
 from fastapi import Depends, Header, HTTPException, Request, status
 
+from app.core.config import settings
 from app.core.security import decode_access_token
 from app.services.users import UserRecord, get_user_by_username
 
@@ -36,6 +39,20 @@ def get_current_user(authorization: str | None = Header(default=None)) -> UserRe
             detail="Usuario inactivo o inexistente",
         )
     return user
+
+
+def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
+    """Autentica integraciones por API key via header ``X-API-Key`` (sin JWT)."""
+    if not settings.api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API key no configurada en el servidor",
+        )
+    if not x_api_key or not secrets.compare_digest(x_api_key, settings.api_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key invalida o ausente",
+        )
 
 
 def require_admin(user: UserRecord = Depends(get_current_user)) -> UserRecord:

@@ -55,6 +55,17 @@ class RecordDetail(BaseModel):
     raw: dict[str, Any]
 
 
+class PinCombinationsResponse(BaseModel):
+    cedula: int
+    full_name: str
+    fecha_nacimiento: str | None = None
+    anio: int | None = None
+    mes: int | None = None
+    dia: int | None = None
+    combinaciones: dict[str, str]
+    lista: list[str]
+
+
 class NameSearchItem(BaseModel):
     aninuip: int
     apellido1: str
