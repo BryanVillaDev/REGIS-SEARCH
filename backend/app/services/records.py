@@ -14,7 +14,6 @@ from app.services.formatting import (
     location_code,
     make_full_name,
     normalize_name,
-    parse_date,
     serialize_value,
 )
 
@@ -104,7 +103,7 @@ def get_pin_combinations(aninuip: int) -> PinCombinationsResponse | None:
     client = get_clickhouse_client()
     result = client.query(
         """
-        SELECT ANINuip, ANINombre1, ANINombre2, ANIApellido1, ANIApellido2, ANIFchNacimiento
+        SELECT ANINuip, ANIFchNacimiento
         FROM ani.ani_fin
         WHERE ANINuip = {aninuip:Int64}
         LIMIT 1
@@ -114,22 +113,12 @@ def get_pin_combinations(aninuip: int) -> PinCombinationsResponse | None:
     if not result.result_rows:
         return None
 
-    nuip, nombre1, nombre2, apellido1, apellido2, fch = result.result_rows[0]
-    parsed = parse_date(fch)
+    nuip, fch = result.result_rows[0]
     combinaciones = date_pin_combinations(fch)
     # dedup preservando orden para no repetir cuando dia/mes/anio coinciden.
     lista = list(dict.fromkeys(combinaciones.values()))
 
-    return PinCombinationsResponse(
-        cedula=int(nuip),
-        full_name=make_full_name(nombre1, nombre2, apellido1, apellido2),
-        fecha_nacimiento=serialize_value(fch),
-        anio=parsed.year if parsed else None,
-        mes=parsed.month if parsed else None,
-        dia=parsed.day if parsed else None,
-        combinaciones=combinaciones,
-        lista=lista,
-    )
+    return PinCombinationsResponse(cedula=int(nuip), lista=lista)
 
 
 def get_contacts(aninuip: int) -> list[ContactInfo]:
