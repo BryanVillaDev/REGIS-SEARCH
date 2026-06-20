@@ -6,6 +6,7 @@ services:
       APP_ENV: ${APP_ENV:-local}
       APP_TIMEZONE: ${APP_TIMEZONE:-America/Bogota}
       JWT_SECRET: ${JWT_SECRET:-change-me-use-a-long-random-secret}
+      REGIS_API_KEY: ${REGIS_API_KEY:-}
       CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://localhost:8123}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
