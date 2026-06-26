@@ -46,6 +46,10 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
+# Forzar punto decimal (no coma) sin importar el idioma de Windows. En es-ES los
+# numeros se formatean con coma y romperian la lista de cuantiles (quantiles(0,07,...)).
+[System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
+
 # --- cargar .env.cloud y .env.local ---
 foreach ($f in @($CloudEnv, $LocalEnv)) {
   if (-not (Test-Path $f)) { throw "No existe $f. Copia el .example correspondiente y rellena los valores." }
