@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Sincroniza la data del ClickHouse CLOUD al ClickHouse LOCAL por HTTP, corriendo
-  desde el HOST con curl.
+  desde el HOST con curl. Resiliente a fallos transitorios (reintentos).
 
 .DESCRIPTION
   No usa el protocolo nativo (9000) ni `docker compose exec`: habla HTTP directo
@@ -14,10 +14,15 @@
     1) Copia el esquema exacto (create_table_query del cloud).
     2) Copia la data EN TROZOS (formato Native, gzip en el cable) para no agotar la
        memoria del ClickHouse local:
-         - llave de orden numerica de una columna -> trozos por RANGO (usa el indice).
+         - llave de orden numerica de una columna -> trozos por RANGO (cuantiles, usa indice).
          - llave compuesta / no numerica          -> trozos por HASH (cityHash64 % K).
        Tablas chicas (<= RowsPerChunk) van de una sola.
     3) Verifica comparando count() local vs cloud. Idempotente (salta si ya coincide).
+
+  Resiliencia:
+    - Consultas y exports reintentan ante fallos transitorios (500, red).
+    - Si un insert falla, se reintenta la tabla COMPLETA (TRUNCATE + recopia), evitando
+      duplicados.
 
 .EXAMPLE
   ./scripts/sync-clickhouse.ps1 -MeasureOnly        # solo medir
@@ -62,36 +67,86 @@ $DBs = ($env:CLOUD_CH_DATABASES -split ',') | ForEach-Object { $_.Trim() } | Whe
 $curl = "$env:SystemRoot\System32\curl.exe"
 if (-not (Test-Path $curl)) { $curl = "curl.exe" }
 
-# Consulta corta al CLOUD (texto). El body es el SQL.
+# Ejecuta curl con reintentos. -ReturnText devuelve la salida (consultas);
+# sin el switch deja que la salida/progreso vaya a consola (exports/imports).
+# Pone EAP=Continue alrededor del nativo para que un stderr no mate el script.
+function Run-Curl([string[]]$a, [string]$label, [int]$tries = 3, [switch]$ReturnText) {
+  for ($n = 1; ; $n++) {
+    $eap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    if ($ReturnText) { $out = & $curl @a 2>&1 } else { & $curl @a; $out = $null }
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $eap
+    if ($code -eq 0) { if ($ReturnText) { return (($out | Out-String).Trim()) } else { return } }
+    if ($n -ge $tries) { throw "$label fallo (curl=$code)$(if($out){":`n$($out | Out-String)"})" }
+    Write-Host "  reintentando $label ($n/$tries)..." -ForegroundColor Yellow
+    Start-Sleep -Seconds (3 * $n)
+  }
+}
+
 function Cloud([string]$sql) {
-  $r = & $curl -sS --fail-with-body -u "${U}:${PW}" "$CloudUrl/?max_execution_time=0" --data-binary $sql 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "CLOUD query fallo:`n$($r | Out-String)" }
-  return (($r | Out-String).Trim())
+  Run-Curl @('-sS', '--fail-with-body', '-u', "${U}:${PW}", "$CloudUrl/?max_execution_time=0", '--data-binary', $sql) 'CLOUD query' 3 -ReturnText
 }
-# Consulta corta al LOCAL (texto).
 function Local([string]$sql) {
-  $r = & $curl -sS --fail-with-body -u "${LU}:${LPW}" "$LocalUrl/" --data-binary $sql 2>&1
-  if ($LASTEXITCODE -ne 0) { throw "LOCAL query fallo:`n$($r | Out-String)" }
-  return (($r | Out-String).Trim())
+  Run-Curl @('-sS', '--fail-with-body', '-u', "${LU}:${LPW}", "$LocalUrl/", '--data-binary', $sql) 'LOCAL query' 3 -ReturnText
 }
-# Exporta del cloud (con WHERE) a $tmp e inserta en el local. Tunea memoria del insert.
+
+# Exporta un trozo del cloud a $tmp e inserta en el local. El export reintenta (seguro);
+# el import NO reintenta solo (lo maneja el reintento de tabla completa, evitando duplicados).
 function Copy-Chunk([string]$db, [string]$t, [string]$where, [string]$tmp) {
   $sel  = "SELECT * FROM $db.$t $where FORMAT Native"
   $insQ = ("INSERT INTO $db.$t FORMAT Native") -replace ' ', '+'
-  $insOpts = "max_insert_threads=1&max_threads=2"
+  $opt  = "max_insert_threads=1&max_threads=2"
   if ($NoCompress) {
-    & $curl --fail-with-body -# -u "${U}:${PW}" "$CloudUrl/?max_execution_time=0" --data-binary $sel -o $tmp
-    if ($LASTEXITCODE -ne 0) { throw "export fallo ($db.$t): $where" }
-    & $curl --fail-with-body -# -u "${LU}:${LPW}" "$LocalUrl/?query=$insQ&$insOpts" --data-binary "@$tmp"
-    if ($LASTEXITCODE -ne 0) { throw "import fallo ($db.$t): $where" }
+    Run-Curl @('--fail-with-body', '-#', '-u', "${U}:${PW}", "$CloudUrl/?max_execution_time=0", '--data-binary', $sel, '-o', $tmp) "export $db.$t" 3
+    Run-Curl @('--fail-with-body', '-#', '-u', "${LU}:${LPW}", "$LocalUrl/?query=$insQ&$opt", '--data-binary', "@$tmp") "import $db.$t" 1
   } else {
-    & $curl --fail-with-body -# -u "${U}:${PW}" -H "Accept-Encoding: gzip" `
-      "$CloudUrl/?enable_http_compression=1&max_execution_time=0" --data-binary $sel -o $tmp
-    if ($LASTEXITCODE -ne 0) { throw "export fallo ($db.$t): $where" }
-    & $curl --fail-with-body -# -u "${LU}:${LPW}" -H "Content-Encoding: gzip" `
-      "$LocalUrl/?enable_http_compression=1&query=$insQ&$insOpts" --data-binary "@$tmp"
-    if ($LASTEXITCODE -ne 0) { throw "import fallo ($db.$t): $where" }
+    Run-Curl @('--fail-with-body', '-#', '-u', "${U}:${PW}", '-H', 'Accept-Encoding: gzip', "$CloudUrl/?enable_http_compression=1&max_execution_time=0", '--data-binary', $sel, '-o', $tmp) "export $db.$t" 3
+    Run-Curl @('--fail-with-body', '-#', '-u', "${LU}:${LPW}", '-H', 'Content-Encoding: gzip', "$LocalUrl/?enable_http_compression=1&query=$insQ&$opt", '--data-binary', "@$tmp") "import $db.$t" 1
   }
+}
+
+# Copia una tabla completa: TRUNCATE + plan de trozos + copia. (Se llama dentro de un
+# reintento de tabla completa, asi que siempre arranca limpio.)
+function Copy-Table([string]$db, [string]$t, [int64]$rc) {
+  [void](Local "TRUNCATE TABLE $db.$t")
+  $K = [int][math]::Max(1, [math]::Ceiling([double]$rc / $RowsPerChunk))
+  $tmp = Join-Path $TempDir "regis_${db}_${t}.native"
+
+  if ($K -le 1) {
+    Write-Host "copiando $rc filas (de una)..." -ForegroundColor Gray
+    Copy-Chunk $db $t "" $tmp
+  }
+  else {
+    $skey = (Cloud "SELECT sorting_key FROM system.tables WHERE database='$db' AND name='$t'").Trim()
+    $rangeCol = $null
+    if ($skey -and ($skey -notmatch ',')) {
+      $type = (Cloud "SELECT type FROM system.columns WHERE database='$db' AND table='$t' AND name='$skey'").Trim()
+      if ($type -match '^U?Int(8|16|32|64|128|256)$') { $rangeCol = $skey }
+    }
+
+    if ($rangeCol) {
+      $probs  = (1..($K - 1) | ForEach-Object { [math]::Round($_ / $K, 6) }) -join ','
+      $qraw   = (Cloud "SELECT quantiles($probs)($rangeCol) FROM $db.$t FORMAT TabSeparatedRaw").Trim('[', ']', ' ')
+      $bounds = @($qraw -split ',' | ForEach-Object { [int64][math]::Round([double]$_) })
+      Write-Host "copiando $rc filas en $K trozos por RANGO de $rangeCol..." -ForegroundColor Gray
+      for ($i = 0; $i -lt $K; $i++) {
+        if ($i -eq 0)          { $where = "WHERE $rangeCol < $($bounds[0])" }
+        elseif ($i -eq $K - 1) { $where = "WHERE $rangeCol >= $($bounds[$K - 2])" }
+        else                   { $where = "WHERE $rangeCol >= $($bounds[$i - 1]) AND $rangeCol < $($bounds[$i])" }
+        Write-Host "  trozo $($i + 1)/$K" -ForegroundColor DarkGray
+        Copy-Chunk $db $t $where $tmp
+      }
+    }
+    else {
+      Write-Host "copiando $rc filas en $K trozos por HASH de ($skey)..." -ForegroundColor Gray
+      for ($i = 0; $i -lt $K; $i++) {
+        $where = "WHERE cityHash64($skey) % $K = $i"
+        Write-Host "  trozo $($i + 1)/$K" -ForegroundColor DarkGray
+        Copy-Chunk $db $t $where $tmp
+      }
+    }
+  }
+  Remove-Item $tmp -ErrorAction SilentlyContinue
 }
 
 # --- preflight ---
@@ -139,48 +194,17 @@ ORDER BY total_bytes FORMAT TabSeparated
       continue
     }
 
-    # 3) plan de trozos
-    [void](Local "TRUNCATE TABLE $db.$t")
-    $K = [int][math]::Max(1, [math]::Ceiling([double]$rc / $RowsPerChunk))
-    $tmp = Join-Path $TempDir "regis_${db}_${t}.native"
-
-    if ($K -le 1) {
-      Write-Host "copiando $rc filas (de una)..." -ForegroundColor Gray
-      Copy-Chunk $db $t "" $tmp
-    }
-    else {
-      # decidir estrategia segun la llave de orden
-      $skey = (Cloud "SELECT sorting_key FROM system.tables WHERE database='$db' AND name='$t'").Trim()
-      $rangeCol = $null
-      if ($skey -and ($skey -notmatch ',')) {
-        $type = (Cloud "SELECT type FROM system.columns WHERE database='$db' AND table='$t' AND name='$skey'").Trim()
-        if ($type -match '^U?Int(8|16|32|64|128|256)$') { $rangeCol = $skey }
-      }
-
-      if ($rangeCol) {
-        # cortes por cuantiles (filas parejas) y lectura por indice
-        $probs  = (1..($K - 1) | ForEach-Object { [math]::Round($_ / $K, 6) }) -join ','
-        $qraw   = (Cloud "SELECT quantiles($probs)($rangeCol) FROM $db.$t FORMAT TabSeparatedRaw").Trim('[', ']', ' ')
-        $bounds = @($qraw -split ',' | ForEach-Object { [int64][math]::Round([double]$_) })
-        Write-Host "copiando $rc filas en $K trozos por RANGO de $rangeCol..." -ForegroundColor Gray
-        for ($i = 0; $i -lt $K; $i++) {
-          if ($i -eq 0)            { $where = "WHERE $rangeCol < $($bounds[0])" }
-          elseif ($i -eq $K - 1)   { $where = "WHERE $rangeCol >= $($bounds[$K - 2])" }
-          else                     { $where = "WHERE $rangeCol >= $($bounds[$i - 1]) AND $rangeCol < $($bounds[$i])" }
-          Write-Host "  trozo $($i + 1)/$K" -ForegroundColor DarkGray
-          Copy-Chunk $db $t $where $tmp
-        }
-      }
-      else {
-        Write-Host "copiando $rc filas en $K trozos por HASH de ($skey)..." -ForegroundColor Gray
-        for ($i = 0; $i -lt $K; $i++) {
-          $where = "WHERE cityHash64($skey) % $K = $i"
-          Write-Host "  trozo $($i + 1)/$K" -ForegroundColor DarkGray
-          Copy-Chunk $db $t $where $tmp
-        }
+    # 3) copiar con reintento de tabla completa (evita duplicados al reintentar)
+    $tableTries = 2
+    for ($try = 1; ; $try++) {
+      try { Copy-Table $db $t $rc; break }
+      catch {
+        if ($try -ge $tableTries) { throw }
+        Write-Host "copia de $db.$t fallo: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "reintento completo de la tabla ($try/$tableTries)..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 10
       }
     }
-    Remove-Item $tmp -ErrorAction SilentlyContinue
 
     # 4) verificar
     $lc2 = [int64](Local "SELECT count() FROM $db.$t")
