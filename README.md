@@ -49,15 +49,19 @@ docker compose -f docker-compose.local.yml --env-file .env.local up -d --build
 #   - forzar refresco:   ./scripts/sync-clickhouse.ps1 -Force
 ```
 
-- Frontend local: `http://localhost:8080` (login con el admin bootstrap).
-- API local: `http://localhost:8000/api/health`.
+- App de busquedas: `http://localhost:8080` (login con el admin bootstrap).
+- API: `http://localhost:8080/api/health` (el frontend la proxya; no hay puerto 8000).
 - ClickHouse local: `localhost:8123` (HTTP) / `localhost:9000` (nativo).
 
 La data queda en el volumen `clickhouse_data`. En arranques siguientes
 (`docker compose -f docker-compose.local.yml --env-file .env.local up -d`) **no** se re-descarga:
 la info sigue sincronizada. Solo vuelve a sincronizar si corres el script otra vez (o con `-Force`).
-El script `scripts/sync-clickhouse.ps1` autodescubre las tablas `MergeTree` de las bases listadas
-en `CLOUD_CH_DATABASES`, recrea su esquema exacto y copia la data via la funcion `remote()`.
+
+El script `scripts/sync-clickhouse.ps1` corre **desde el host por HTTP** (no usa el protocolo
+nativo 9000 ni el contenedor): autodescubre las tablas `MergeTree` de las bases en
+`CLOUD_CH_DATABASES`, recrea su esquema exacto y copia la data en formato `Native` con gzip
+en el cable. Esto funciona aun cuando el contenedor de Docker no logra salir al cloud por el
+puerto nativo (un problema comun de Docker Desktop en Windows/Wi-Fi).
 
 ## Seguridad
 

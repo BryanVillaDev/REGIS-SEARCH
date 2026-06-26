@@ -50,8 +50,8 @@ services:
       XLSX_MAX_ROWS: ${XLSX_MAX_ROWS:-200000}
     volumes:
       - regis_exports:/exports
-    ports:
-      - "8000:8000"
+    # El API NO publica puerto propio: el frontend lo proxya en http://localhost:8080/api
+    # (asi todo queda en 8080 y no choca con nada en el host).
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     depends_on:
       clickhouse:
