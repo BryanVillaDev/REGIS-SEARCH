@@ -1,8 +1,6 @@
 <clickhouse>
-  <!-- Local dev: deja que ClickHouse use hasta el 80% de la RAM de Docker.
-       Para SUBIR la RAM de Docker (WSL2): edita %UserProfile%\.wslconfig con
-         [wsl2]
-         memory=8GB
-       y luego  wsl --shutdown  + reinicia Docker Desktop. -->
+  <!-- Local dev: ClickHouse puede usar hasta el 80% de la RAM de Docker.
+       Para subir la RAM de Docker (WSL2): edita %UserProfile%\.wslconfig con
+       una seccion [wsl2] y memory=8GB, luego reinicia WSL y Docker Desktop. -->
   <max_server_memory_usage_to_ram_ratio>0.8</max_server_memory_usage_to_ram_ratio>
 </clickhouse>
