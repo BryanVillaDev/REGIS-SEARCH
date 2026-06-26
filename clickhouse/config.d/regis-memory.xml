@@ -1,4 +1,6 @@
 <clickhouse>
   <listen_host>0.0.0.0</listen_host>
-  <max_server_memory_usage>8000000000</max_server_memory_usage>
+  <!-- Tope JUSTO por debajo de la RAM fisica de Docker (~4GB) para no caer en swap. -->
+  <max_server_memory_usage>3000000000</max_server_memory_usage>
+  <background_pool_size>1</background_pool_size>
 </clickhouse>
